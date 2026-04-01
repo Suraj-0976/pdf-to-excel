@@ -3,6 +3,8 @@ import pdfplumber
 import pandas as pd
 import re
 import os
+from io import BytesIO
+from werkzeug.utils import secure_filename
 
 app = Flask(__name__)
 
@@ -11,12 +13,9 @@ os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 
 def clean_name(raw_name):
-    # only keep letters + space
     name = re.sub(r'[^A-Z ]', ' ', raw_name.upper())
-
     words = name.split()
 
-    # BIG subject list
     subjects = {
         "GEOGRAPHY", "HISTORY", "POLITICAL", "SCIENCE",
         "ECONOMICS", "SOCIOLOGY", "PHILOSOPHY", "HINDI",
@@ -26,19 +25,13 @@ def clean_name(raw_name):
     clean_words = []
 
     for w in words:
-        # skip subject words
         if w in subjects:
             continue
-
-        # skip 1-letter garbage (A, H etc)
         if len(w) == 1:
             continue
-
         clean_words.append(w)
 
-    # take only first 3 words (real name)
     name = " ".join(clean_words[:3])
-
     return name.strip()
 
 
@@ -56,7 +49,6 @@ def extract_data(pdf_path):
             if not text:
                 continue
 
-            # ---------------- HEADER ----------------
             if not course_name:
                 match = re.search(r"BACHELOR OF .*", text)
                 if match:
@@ -72,7 +64,6 @@ def extract_data(pdf_path):
                 if match:
                     center_name = match.group(1).strip()
 
-            # ---------------- STUDENT DATA ----------------
             lines = text.split("\n")
 
             for line in lines:
@@ -88,7 +79,6 @@ def extract_data(pdf_path):
                     raw_name = match.group(2)
                     roll_no = match.group(4)
 
-                    # 🔥 FIXED NAME CLEANING
                     name = clean_name(raw_name)
 
                     students.append([
@@ -124,21 +114,25 @@ def index():
 def upload():
     file = request.files["pdf"]
 
-    pdf_path = os.path.join(UPLOAD_FOLDER, file.filename)
+    filename = secure_filename(file.filename)
+    pdf_path = os.path.join(UPLOAD_FOLDER, filename)
     file.save(pdf_path)
 
     df = extract_data(pdf_path)
 
-    base_name = os.path.splitext(file.filename)[0]
-    output_filename = f"{base_name}_result.xlsx"
-    output_path = os.path.join(UPLOAD_FOLDER, output_filename)
+    # 🔥 MEMORY BASED EXCEL (NO CORRUPTION)
+    output = BytesIO()
 
-    df.to_excel(output_path, index=False)
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        df.to_excel(writer, index=False)
+
+    output.seek(0)
 
     return send_file(
-        output_path,
+        output,
         as_attachment=True,
-        download_name=output_filename
+        download_name="result.xlsx",
+        mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
     )
 
 
